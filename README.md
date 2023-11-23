@@ -3,6 +3,8 @@
 
 Tortoise is a proof-of-concept project that try to run Tortoise with AMD GPU on Windows by calling DirectML. 
 
+<br>
+
 
 # Environment Requirement 
 
@@ -11,6 +13,9 @@ Tortoise is a proof-of-concept project that try to run Tortoise with AMD GPU on 
 
 
 To mitigate potential environment conflict, it's strongly suggested to have torch, torchaudio, torchvision removed from your site-packages (in case of being carry-over to virtualenv) then use virtualenv for testing this project.
+
+
+<br>
 
 # Setup Virtual Environment
 
@@ -21,10 +26,10 @@ pip install torch-directml torchaudio torchvision numba inflect psutil transform
 cd tortoise-tts-directml
 python -m pip install .
 ```
-
+<br>
 
 # Available Scenarios
-There are some function does not supported by DirectML, which leads to not all feature of Tortoise project can be directly used. At this moment, only the following scenarios are supported. 
+There are some functions do not supported by DirectML at this moment, which lead to not all feature of Tortoise project can be directly used. Only the following scenarios are supported. 
 
 
 **TextToSpeech**
