@@ -18,7 +18,6 @@ To mitigate potential environment conflict, it's strongly suggested to have torc
 <br>
 
 # Setup Virtual Environment
-
 ``` CMD
 virtualenv venv 
 venv\Scripts\activate.bat
@@ -26,6 +25,11 @@ pip install torch-directml torchaudio torchvision numba inflect psutil transform
 cd tortoise-tts-directml
 python -m pip install .
 ```
+
+I understand environment setup is sometime fastracting, in case your environment can't work as expected. 
+
+[Here is a compressed working venv](https://drive.google.com/file/d/1-zSrs1La-ZNLUTf2aiMjSaAI2JOhdQ2P/view?usp=sharing)
+
 <br>
 
 # Available Scenarios
