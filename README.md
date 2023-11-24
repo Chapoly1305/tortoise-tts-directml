@@ -33,12 +33,19 @@ I understand environment setup is sometime fastracting, in case your environment
 <br>
 
 # Available Scenarios
-There are some functions do not supported by DirectML at this moment, which lead to not all feature of Tortoise project can be directly used. Only the following scenarios are supported. 
+There are some functions do not supported by DirectML at this moment, which lead to not all feature of Tortoise project can be directly used. Only the following scenarios are supported. Some degree of computation are done by CPU because DirectML compatibility issue, which might reduce performance compares to full CUDA. 
+The parameters of **--half**, **--batch-size**, and **--preset** will affect generation speed significantly. It's recommended to use a lower configuration for testing purpose for reducing the wait time. 
 
-
-**TextToSpeech**
+**TextToSpeech - Short**
 
 
 ``` CMD
-python tortoise/do_tts.py --voice random --preset fast --text "Hello World" 
+python tortoise\do_tts.py --voice random --preset ultra_fast --text "Hello World" 
+```
+
+**TextToSpeech - Long**
+
+
+``` CMD
+python tortoise\read.py --textfile document.txt --voice random --preset ultra_fast
 ```
