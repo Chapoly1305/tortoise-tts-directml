@@ -442,6 +442,7 @@ class UnifiedVoice(nn.Module):
             return first_logits
 
     def get_conditioning(self, speech_conditioning_input):
+        speech_conditioning_input  = speech_conditioning_input.cpu()
         speech_conditioning_input = speech_conditioning_input.unsqueeze(1) if len(
             speech_conditioning_input.shape) == 3 else speech_conditioning_input
         conds = []

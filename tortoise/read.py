@@ -11,28 +11,35 @@ from utils.text import split_and_recombine_text
 
 
 if __name__ == '__main__':
+
+    # get folder names under ./voices save to a list
+
+
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--textfile', type=str, help='A file containing the text to read.', default="tortoise/data/riding_hood.txt")
     parser.add_argument('--voice', type=str, help='Selects the voice to use for generation. See options in voices/ directory (and add your own!) '
-                                                 'Use the & character to join two voices together. Use a comma to perform inference on multiple voices.', default='pat')
+                                                 'Use the & character to join two voices together. Use a comma to perform inference on multiple voices.', default='mol')
     parser.add_argument('--output_path', type=str, help='Where to store outputs.', default='results/longform/')
-    parser.add_argument('--output_name', type=str, help='How to name the output file', default='combined.wav')
-    parser.add_argument('--preset', type=str, help='Which voice preset to use.', default='standard')
+    parser.add_argument('--output_name', type=str, help='How to name the output file', default='combined')
+    parser.add_argument('--preset', type=str, help='Which voice preset to use. Default to standard', default='standard', choices=['high_quality' , 'standard', 'fast', 'ultra_fast'])
     parser.add_argument('--regenerate', type=str, help='Comma-separated list of clip numbers to re-generate, or nothing.', default=None)
     parser.add_argument('--candidates', type=int, help='How many output candidates to produce per-voice. Only the first candidate is actually used in the final product, the others can be used manually.', default=1)
     parser.add_argument('--model_dir', type=str, help='Where to find pretrained model checkpoints. Tortoise automatically downloads these to .models, so this'
                                                       'should only be specified if you have custom checkpoints.', default=MODELS_DIR)
     parser.add_argument('--seed', type=int, help='Random seed which can be used to reproduce results.', default=None)
     parser.add_argument('--produce_debug_state', type=bool, help='Whether or not to produce debug_state.pth, which can aid in reproducing problems. Defaults to true.', default=True)
-    parser.add_argument('--use_deepspeed', type=bool, help='Use deepspeed for speed bump.', default=False)
-    parser.add_argument('--kv_cache', type=bool, help='If you disable this please wait for a long a time to get the output', default=True)
-    parser.add_argument('--half', type=bool, help="float16(half) precision inference if True it's faster and take less vram and ram", default=True)
-
+    parser.add_argument('--use_deepspeed', type=bool, help='Use deepspeed for speed bump.', default=False, choices=[True, False])
+    parser.add_argument('--kv_cache', type=bool, help='If you disable this please wait for a long a time to get the output', default=True, choices=[True, False])
+    parser.add_argument('--half', type=bool, help="float16(half) precision inference if True it's faster and take less vram and ram", default=True, choices=[True, False])
+    parser.add_argument('--batch_size', type=int, help='(Optional) If you want to specify the batch size to use for autoregression. Usually, VRAM-2GB if half=True, VRAM/2 if half=False')
 
     args = parser.parse_args()
-    if torch.backends.mps.is_available():
+    if torch.cuda.is_available():
+        args.use_deepspeed = True
+    else:
         args.use_deepspeed = False
-    tts = TextToSpeech(models_dir=args.model_dir, use_deepspeed=args.use_deepspeed, kv_cache=args.kv_cache, half=args.half)
+    tts = TextToSpeech(models_dir=args.model_dir, use_deepspeed=args.use_deepspeed, kv_cache=args.kv_cache, half=args.half, autoregressive_batch_size=args.batch_size)
 
     outpath = args.output_path
     outname = args.output_name
