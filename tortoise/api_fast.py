@@ -7,6 +7,7 @@ from urllib import request
 import torch
 import torch.nn.functional as F
 import progressbar
+import torch_directml
 import torchaudio
 import numpy as np
 from tortoise.models.classifier import AudioMiniEncoderWithClassifierHead
@@ -139,7 +140,7 @@ def classify_audio_clip(clip):
                                                     resnet_blocks=2, attn_blocks=4, num_attn_heads=4, base_channels=32,
                                                     dropout=0, kernel_size=5, distribute_zero_label=False)
     classifier.load_state_dict(torch.load(get_model_path('classifier.pth'), map_location=torch.device('cpu')))
-    clip = clip.cpu().unsqueeze(0)
+    clip = clip.unsqueeze(0)
     results = F.softmax(classifier(clip), dim=-1)
     return results[0][0]
 
@@ -170,12 +171,25 @@ def pick_best_batch_size_for_gpu():
             return 4
     return 1
 
+def get_optimal_device_name():
+    if torch.cuda.is_available():
+        return "cuda"
+
+    if torch.backends.mps.is_available():
+        return "mps"
+
+    if torch_directml.is_available():
+        return "privateuseone:0"
+
+    return "cpu"
+
+
 class TextToSpeech:
     """
     Main entry point into Tortoise.
     """
 
-    def __init__(self, autoregressive_batch_size=None, models_dir=MODELS_DIR, 
+    def __init__(self, autoregressive_batch_size=None, models_dir=MODELS_DIR,
                  enable_redaction=True, kv_cache=False, use_deepspeed=False, half=False, device=None,
                  tokenizer_vocab_file=None, tokenizer_basic=False):
 
@@ -193,9 +207,8 @@ class TextToSpeech:
         self.models_dir = models_dir
         self.autoregressive_batch_size = pick_best_batch_size_for_gpu() if autoregressive_batch_size is None else autoregressive_batch_size
         self.enable_redaction = enable_redaction
-        self.device = torch.device('cuda' if torch.cuda.is_available() else'cpu')
-        if torch.backends.mps.is_available():
-            self.device = torch.device('mps')
+        self.device = torch.device(get_optimal_device_name())
+
         if self.enable_redaction:
             self.aligner = Wav2VecAlignment()
 
@@ -208,18 +221,20 @@ class TextToSpeech:
             # Assume this is a traced directory.
             self.autoregressive = torch.jit.load(f'{models_dir}/autoregressive.ptt')
         else:
-            self.autoregressive = UnifiedVoice(max_mel_tokens=604, max_text_tokens=402, max_conditioning_inputs=2, layers=30,
-                                          model_dim=1024,
-                                          heads=16, number_text_tokens=255, start_text_token=255, checkpointing=False,
-                                          train_solo_embeddings=False).to(self.device).eval()
-            self.autoregressive.load_state_dict(torch.load(get_model_path('autoregressive.pth', models_dir)), strict=False)
+            self.autoregressive = UnifiedVoice(max_mel_tokens=604, max_text_tokens=402, max_conditioning_inputs=2,
+                                               layers=30, model_dim=1024, heads=16, number_text_tokens=255,
+                                               start_text_token=255, checkpointing=False,
+                                               train_solo_embeddings=False).to(self.device).eval()
+            self.autoregressive.load_state_dict(torch.load(get_model_path('autoregressive.pth', models_dir)),
+                                                strict=False)
             self.autoregressive.post_init_gpt2_config(use_deepspeed=use_deepspeed, kv_cache=kv_cache, half=self.half)
 
+        self.autoregressive = self.autoregressive.to(self.device)
         self.hifi_decoder = HifiganGenerator(in_channels=1024, out_channels = 1, resblock_type = "1",
         resblock_dilation_sizes = [[1, 3, 5], [1, 3, 5], [1, 3, 5]], resblock_kernel_sizes = [3, 7, 11],
         upsample_kernel_sizes = [16, 16, 4, 4], upsample_initial_channel = 512, upsample_factors = [8, 8, 2, 2],
-        cond_channels=1024).to(self.device).eval()
-        hifi_model = torch.load(get_model_path('hifidecoder.pth'))
+        cond_channels=1024).to(self.device)
+        hifi_model = torch.load(get_model_path('hifidecoder.pth'), map_location=torch.device('cpu'))
         self.hifi_decoder.load_state_dict(hifi_model, strict=False)
         # Random latent generators (RLGs) are loaded lazily.
         self.rlg_auto = None
@@ -231,6 +246,7 @@ class TextToSpeech:
         :param voice_samples: List of 2 or more ~10 second reference clips, which should be torch tensors containing 22.05kHz waveform data.
         """
         with torch.no_grad():
+            self.device = torch.device("cpu")
             voice_samples = [v.to(self.device) for v in voice_samples]
 
             auto_conds = []
@@ -239,7 +255,8 @@ class TextToSpeech:
             for vs in voice_samples:
                 auto_conds.append(format_conditioning(vs, device=self.device))
             auto_conds = torch.stack(auto_conds, dim=1)
-            auto_latent = self.autoregressive.get_conditioning(auto_conds)
+            auto_latent = self.autoregressive.cpu().get_conditioning(auto_conds)
+        self.device = torch.device(get_optimal_device_name())
 
         if return_mels:
             return auto_latent
@@ -366,27 +383,47 @@ class TextToSpeech:
             calm_token = 83  # This is the token for coding silence, which is fixed in place with "fix_autoregressive_output"
             if verbose:
                 print("Generating autoregressive samples..")
-            with torch.autocast(
-                    device_type="cuda" , dtype=torch.float16, enabled=self.half
-                ):
-                fake_inputs = self.autoregressive.compute_embeddings(
-                    auto_conditioning,
-                    text_tokens,
-                )
-                gpt_generator = self.autoregressive.get_generator(
-                    fake_inputs=fake_inputs,
-                    top_k=50,
-                    top_p=top_p,
-                    temperature=temperature,
-                    do_sample=True,
-                    num_beams=1,
-                    num_return_sequences=1,
-                    length_penalty=float(length_penalty),
-                    repetition_penalty=float(repetition_penalty),
-                    output_attentions=False,
-                    output_hidden_states=True,
-                    **hf_generate_kwargs,
-                )
+            if torch.cuda.is_available():
+                with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=self.half):
+                    fake_inputs = self.autoregressive.compute_embeddings(
+                        auto_conditioning,
+                        text_tokens,
+                    )
+                    gpt_generator = self.autoregressive.get_generator(
+                        fake_inputs=fake_inputs,
+                        top_k=50,
+                        top_p=top_p,
+                        temperature=temperature,
+                        do_sample=True,
+                        num_beams=1,
+                        num_return_sequences=1,
+                        length_penalty=float(length_penalty),
+                        repetition_penalty=float(repetition_penalty),
+                        output_attentions=False,
+                        output_hidden_states=True,
+                        **hf_generate_kwargs,
+                    )
+            else:
+                with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=self.half):
+                    fake_inputs = self.autoregressive.compute_embeddings(
+                        auto_conditioning,
+                        text_tokens,
+                    )
+                    gpt_generator = self.autoregressive.get_generator(
+                        fake_inputs=fake_inputs,
+                        top_k=50,
+                        top_p=top_p,
+                        temperature=temperature,
+                        do_sample=True,
+                        num_beams=1,
+                        num_return_sequences=1,
+                        length_penalty=float(length_penalty),
+                        repetition_penalty=float(repetition_penalty),
+                        output_attentions=False,
+                        output_hidden_states=True,
+                        **hf_generate_kwargs,
+                    )
+
             all_latents = []
             codes_ = []
             wav_gen_prev = None
@@ -416,7 +453,7 @@ class TextToSpeech:
                     yield wav_chunk
     def tts(self, text, voice_samples=None, k=1, verbose=True, use_deterministic_seed=None,
             # autoregressive generation parameters follow
-            num_autoregressive_samples=512, temperature=.8, length_penalty=1, repetition_penalty=2.0, 
+            num_autoregressive_samples=512, temperature=.8, length_penalty=1, repetition_penalty=2.0,
             top_p=.8, max_mel_tokens=500,
             # CVVP parameters follow
             cvvp_amount=.0,
@@ -474,28 +511,46 @@ class TextToSpeech:
             calm_token = 83  # This is the token for coding silence, which is fixed in place with "fix_autoregressive_output"
             if verbose:
                 print("Generating autoregressive samples..")
-            with torch.autocast(
-                    device_type="cuda" , dtype=torch.float16, enabled=self.half
-                ):
-                codes = self.autoregressive.inference_speech(auto_conditioning, text_tokens,
-                                                            top_k=50,
-                                                            top_p=top_p,
-                                                            temperature=temperature,
-                                                            do_sample=True,
-                                                            num_beams=1,
-                                                            num_return_sequences=1,
-                                                            length_penalty=float(length_penalty),
-                                                            repetition_penalty=float(repetition_penalty),
-                                                            output_attentions=False,
-                                                            output_hidden_states=True,
-                                                            **hf_generate_kwargs)
-                gpt_latents = self.autoregressive(auto_conditioning.repeat(k, 1), text_tokens.repeat(k, 1),
-                                torch.tensor([text_tokens.shape[-1]], device=text_tokens.device), codes,
-                                torch.tensor([codes.shape[-1]*self.autoregressive.mel_length_compression], device=text_tokens.device),
-                                return_latent=True, clip_inputs=False)
+
+            if torch.cuda.is_available():
+                with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=self.half):
+                    codes = self.autoregressive.inference_speech(auto_conditioning, text_tokens,
+                                                                                 top_k=50,
+                                                                                 top_p=top_p,
+                                                                                 temperature=temperature,
+                                                                                 do_sample=True,
+                                                                                 num_beams=1,
+                                                                                 num_return_sequences=1,
+                                                                                 length_penalty=float(length_penalty),
+                                                                                 repetition_penalty=float(
+                                                                                     repetition_penalty),
+                                                                                 output_attentions=False,
+                                                                                 output_hidden_states=True,
+                                                                                 **hf_generate_kwargs)
+            else:
+                codes = self.autoregressive.to(self.device).inference_speech(auto_conditioning, text_tokens,
+                                                                             top_k=50,
+                                                                             top_p=top_p,
+                                                                             temperature=temperature,
+                                                                             do_sample=True,
+                                                                             num_beams=1,
+                                                                             num_return_sequences=1,
+                                                                             length_penalty=float(length_penalty),
+                                                                             repetition_penalty=float(repetition_penalty),
+                                                                             output_attentions=False,
+                                                                             output_hidden_states=True,
+                                                                             **hf_generate_kwargs)
+
+            gpt_latents = self.autoregressive(auto_conditioning.repeat(k, 1), text_tokens.repeat(k, 1),
+                                              torch.tensor([text_tokens.shape[-1]], device=text_tokens.device), codes,
+                                              torch.tensor([codes.shape[-1]*self.autoregressive.mel_length_compression],
+                                                           device=text_tokens.device),
+                                              return_latent=True, clip_inputs=False)
+
             if verbose:
                 print("generating audio..")
-            wav_gen = self.hifi_decoder.inference(gpt_latents.to(self.device), auto_conditioning)
+
+            wav_gen = self.hifi_decoder.inference(gpt_latents, auto_conditioning)
             return wav_gen
     def deterministic_state(self, seed=None):
         """

@@ -39,7 +39,8 @@ if __name__ == '__main__':
         args.use_deepspeed = True
     else:
         args.use_deepspeed = False
-    tts = TextToSpeech(models_dir=args.model_dir, use_deepspeed=args.use_deepspeed, kv_cache=args.kv_cache, half=args.half, autoregressive_batch_size=args.batch_size)
+    tts = TextToSpeech(models_dir=args.model_dir, use_deepspeed=args.use_deepspeed,
+                       kv_cache=args.kv_cache, half=args.half, autoregressive_batch_size=args.batch_size)
 
     outpath = args.output_path
     outname = args.output_name

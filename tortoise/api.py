@@ -275,8 +275,7 @@ class TextToSpeech:
     @contextmanager
     def temporary_cuda(self, model):
         m = model.to(self.device)
-        yield m
-        # m = model.cpu()
+        return m
 
     def load_cvvp(self):
         """Load CVVP model."""
