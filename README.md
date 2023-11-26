@@ -28,7 +28,7 @@ python -m pip install .
 
 I understand environment setup is sometime fastracting, in case your environment can't work as expected. 
 
-[Here is a compressed working venv](https://drive.google.com/file/d/1-zSrs1La-ZNLUTf2aiMjSaAI2JOhdQ2P/view?usp=sharing)
+[Here is a compressed working venv](https://drive.google.com/drive/folders/1mbOumQ4EH3Hjm3N4ieoUvPHV1kQle2gn?usp=drive_link)
 
 <br>
 
