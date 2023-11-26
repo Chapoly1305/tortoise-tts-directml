@@ -49,3 +49,10 @@ python tortoise\do_tts.py --voice random --preset ultra_fast --text "Hello World
 ``` CMD
 python tortoise\read.py --textfile document.txt --voice random --preset ultra_fast
 ```
+
+**TextToSpeech - Long&Fast**
+
+
+``` CMD
+python tortoise\read_fast.py --textfile document.txt --voice random --preset ultra_fast
+```
