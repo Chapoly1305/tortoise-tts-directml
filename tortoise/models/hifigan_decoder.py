@@ -1,5 +1,6 @@
 # adopted from https://github.com/jik876/hifi-gan/blob/master/models.py
 import torch
+import torch_directml
 from torch import nn
 from torch.nn import Conv1d, ConvTranspose1d
 from torch.nn import functional as F
@@ -230,9 +231,13 @@ class HifiganGenerator(torch.nn.Module):
         if not conv_post_weight_norm:
             remove_weight_norm(self.conv_post)
 
-        self.device = torch.device('cuda' if torch.cuda.is_available() else'cpu')
-        if torch.backends.mps.is_available():
-            self.device = torch.device('mps')
+        if torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        elif torch_directml.is_available():
+            self.device = torch_directml.device(0)
+        else:
+            self.device = torch.device("cpu")
+
 
     def forward(self, x, g=None):
         """

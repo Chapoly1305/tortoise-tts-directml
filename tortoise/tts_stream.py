@@ -34,12 +34,16 @@ if __name__ == '__main__':
     parser.add_argument('--use_deepspeed', type=bool, help='Use deepspeed for speed bump.', default=False)
     parser.add_argument('--kv_cache', type=bool, help='If you disable this please wait for a long a time to get the output', default=True)
     parser.add_argument('--half', type=bool, help="float16(half) precision inference if True it's faster and take less vram and ram", default=True)
-
+    parser.add_argument('--batch_size', type=int, help='(Optional) If you want to specify the batch size to use for autoregression. Usually, VRAM-2GB if half=True, VRAM/2 if half=False')
 
     args = parser.parse_args()
-    if torch.backends.mps.is_available():
+    if torch.cuda.is_available():
+        args.use_deepspeed = True
+    else:
         args.use_deepspeed = False
-    tts = TextToSpeech(models_dir=args.model_dir, use_deepspeed=args.use_deepspeed, kv_cache=args.kv_cache, half=args.half)
+
+    tts = TextToSpeech(models_dir=args.model_dir, use_deepspeed=args.use_deepspeed,
+                       kv_cache=args.kv_cache, half=args.half, autoregressive_batch_size=args.batch_size)
 
     outpath = args.output_path
     outname = args.output_name
