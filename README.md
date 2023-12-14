@@ -1,7 +1,7 @@
 # Tortoise-DirectML 
 
 
-Tortoise is a proof-of-concept project that try to run Tortoise with AMD GPU on Windows by calling DirectML. 
+Tortoise-DirectML is a proof-of-concept project that try to run Tortoise with AMD GPU on Windows by calling DirectML. 
 
 <br>
 
