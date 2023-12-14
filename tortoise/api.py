@@ -274,8 +274,12 @@ class TextToSpeech:
 
     @contextmanager
     def temporary_cuda(self, model):
-        m = model.to(self.device)
-        return m
+        try:
+            m = model.to(self.device)  # Move model to CUDA device
+            yield m  # This is where the context is used
+        finally:
+            # Cleanup code here (if needed)
+            pass
 
     def load_cvvp(self):
         """Load CVVP model."""
