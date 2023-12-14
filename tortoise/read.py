@@ -11,11 +11,6 @@ from utils.text import split_and_recombine_text
 
 
 if __name__ == '__main__':
-
-    # get folder names under ./voices save to a list
-
-
-
     parser = argparse.ArgumentParser()
     parser.add_argument('--textfile', type=str, help='A file containing the text to read.', default="tortoise/data/riding_hood.txt")
     parser.add_argument('--voice', type=str, help='Selects the voice to use for generation. See options in voices/ directory (and add your own!) '

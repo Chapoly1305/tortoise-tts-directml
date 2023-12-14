@@ -1,12 +1,9 @@
 import os
 import random
-import uuid
 from time import time
-from urllib import request
 
 import torch, torch_directml
 import torch.nn.functional as F
-import progressbar
 import torchaudio
 
 from tortoise.models.classifier import AudioMiniEncoderWithClassifierHead
@@ -24,6 +21,8 @@ from tortoise.utils.tokenizer import VoiceBpeTokenizer
 from tortoise.utils.wav2vec_alignment import Wav2VecAlignment
 from contextlib import contextmanager
 from huggingface_hub import hf_hub_download
+
+import logging
 
 pbar = None
 
@@ -58,6 +57,7 @@ def get_model_path(model_name, models_dir=MODELS_DIR):
     """
     Get path to given model, download it if it doesn't exist.
     """
+    logging.debug(f"get_model_path - {model_name, models_dir}, The current device is: {get_optimal_device_name()}")
     if model_name not in MODELS:
         raise ValueError(f'Model {model_name} not found in available models.')
     model_path = hf_hub_download(repo_id="Manmay/tortoise-tts", filename=model_name, cache_dir=models_dir)
@@ -208,7 +208,7 @@ class TextToSpeech:
 
     def __init__(self, autoregressive_batch_size=None, models_dir=MODELS_DIR,
                  enable_redaction=True, kv_cache=False, use_deepspeed=False, half=False, device=None,
-                 tokenizer_vocab_file=None, tokenizer_basic=False):
+                 tokenizer_vocab_file=None, tokenizer_basic=False, verbose=True):
 
         """
         Constructor
@@ -225,6 +225,9 @@ class TextToSpeech:
         self.autoregressive_batch_size = pick_best_batch_size_for_gpu() if autoregressive_batch_size is None else autoregressive_batch_size
         self.enable_redaction = enable_redaction
         self.device = torch.device(get_optimal_device_name())
+        self.directML_available = torch_directml.is_available()
+        if verbose:
+            logging.basicConfig(level=logging.INFO)
 
         if self.enable_redaction:
             self.aligner = Wav2VecAlignment()
@@ -258,7 +261,7 @@ class TextToSpeech:
         self.clvp = CLVP(dim_text=768, dim_speech=768, dim_latent=768, num_text_tokens=256, text_enc_depth=20,
                          text_seq_len=350, text_heads=12,
                          num_speech_tokens=8192, speech_enc_depth=20, speech_heads=12, speech_seq_len=430,
-                         use_xformers=True).cpu().eval()
+                         use_xformers=True).eval()
         self.clvp.load_state_dict(torch.load(get_model_path('clvp2.pth', models_dir)))
         self.cvvp = None  # CVVP model is only loaded if used.
 
@@ -266,6 +269,7 @@ class TextToSpeech:
         self.vocoder = UnivNetGenerator().cpu()
         self.vocoder.load_state_dict(
             torch.load(get_model_path('vocoder.pth', models_dir), map_location=torch.device('cpu'))['model_g'])
+
         self.vocoder.eval(inference=True)
 
         # Random latent generators (RLGs) are loaded lazily.
@@ -285,7 +289,7 @@ class TextToSpeech:
         """Load CVVP model."""
         self.cvvp = CVVP(model_dim=512, transformer_heads=8, dropout=0, mel_codes=8192, conditioning_enc_depth=8,
                          cond_mask_percentage=0,
-                         speech_enc_depth=8, speech_mask_percentage=0, latent_multiplier=1).cpu().eval()
+                         speech_enc_depth=8, speech_mask_percentage=0, latent_multiplier=1).eval()
         self.cvvp.load_state_dict(torch.load(get_model_path('cvvp.pth', self.models_dir)))
 
     def get_conditioning_latents(self, voice_samples, return_mels=False):
@@ -298,6 +302,8 @@ class TextToSpeech:
         with torch.no_grad():
             # DirectML has some issue in this function, so we temporarily move to CPU.
             self.device = torch.device("cpu")
+            logging.debug(f"get_conditioning_latents - The current device is: {self.device}")
+
             voice_samples = [v.to(self.device) for v in voice_samples]
 
             auto_conds = []
@@ -323,7 +329,9 @@ class TextToSpeech:
             self.diffusion = self.diffusion.to(self.device)
             diffusion_latent = self.diffusion.get_conditioning(diffusion_conds)
             self.diffusion = self.diffusion.cpu()
+
         self.device = torch.device(get_optimal_device_name())
+        logging.debug(f"get_conditioning_latents - The current device is: {self.device}")
         if return_mels:
             return auto_latent, diffusion_latent, auto_conds, diffusion_conds
         else:
@@ -443,12 +451,14 @@ class TextToSpeech:
             num_batches = num_autoregressive_samples // self.autoregressive_batch_size
             stop_mel_token = self.autoregressive.stop_mel_token
             calm_token = 83  # This is the token for coding silence, which is fixed in place with "fix_autoregressive_output"
-            if verbose:
-                print("Generating autoregressive samples..")
-                print(f"CUDA Available: \t{torch.cuda.is_available()}")
-                print(f"MPS Available: \t\t{torch.backends.mps.is_available()}")
-                print(f"DirectML Available: \t{torch_directml.is_available()}")
-                print(f"Autoregressive Batch Size: {self.autoregressive_batch_size}")
+
+            logging.info("Generating autoregressive samples..")
+            logging.info(f"CUDA Available: \t{torch.cuda.is_available()}")
+            logging.info(f"MPS Available: \t{torch.backends.mps.is_available()}")
+            logging.info(f"DirectML Available: \t{torch_directml.is_available()}")
+            logging.info(f"Autoregressive Batch Size: {self.autoregressive_batch_size}")
+
+            logging.debug(f"Autoregressive - The current device is: {self.device}")
 
             # CUDA
             if torch.cuda.is_available():
@@ -487,7 +497,6 @@ class TextToSpeech:
                         codes = F.pad(codes, (0, padding_needed), value=stop_mel_token)
                         samples.append(codes)
 
-            # CPU
             # DirectML doesn't support autocast for now.
             # https://github.com/microsoft/DirectML/issues/454#issuecomment-1703862192
             else:
@@ -508,6 +517,7 @@ class TextToSpeech:
 
             clip_results = []
 
+            logging.debug(f"CLVP - The current device is: {self.device}")
             # CUDA
             if torch.cuda.is_available():
                 with self.temporary_cuda(self.clvp) as clvp, torch.autocast(
@@ -517,12 +527,12 @@ class TextToSpeech:
                         if self.cvvp is None:
                             self.load_cvvp()
                         self.cvvp = self.cvvp.to(self.device)
-                    if verbose:
-                        if self.cvvp is None:
-                            print("Computing best candidates using CLVP")
-                        else:
-                            print(
-                                f"Computing best candidates using CLVP {((1 - cvvp_amount) * 100):2.0f}% and CVVP {(cvvp_amount * 100):2.0f}%")
+                    if self.cvvp is None:
+                        logging.info("Computing best candidates using CLVP")
+                    else:
+                        logging.info(
+                            f"Computing best candidates using CLVP {((1 - cvvp_amount) * 100):2.0f}% and CVVP {(cvvp_amount * 100):2.0f}%")
+
                     for batch in tqdm(samples, disable=not verbose):
                         for i in range(batch.shape[0]):
                             batch[i] = fix_autoregressive_output(batch[i], stop_mel_token)
@@ -553,12 +563,12 @@ class TextToSpeech:
                         if self.cvvp is None:
                             self.load_cvvp()
                         self.cvvp = self.cvvp.to(self.device)
-                    if verbose:
-                        if self.cvvp is None:
-                            print("Computing best candidates using CLVP")
-                        else:
-                            print(
-                                f"Computing best candidates using CLVP {((1 - cvvp_amount) * 100):2.0f}% and CVVP {(cvvp_amount * 100):2.0f}%")
+                    if self.cvvp is None:
+                        logging.info("Computing best candidates using CLVP")
+                    else:
+
+                        logging.info(
+                            f"Computing best candidates using CLVP {((1 - cvvp_amount) * 100):2.0f}% and CVVP {(cvvp_amount * 100):2.0f}%")
                     for batch in tqdm(samples, disable=not verbose):
                         for i in range(batch.shape[0]):
                             batch[i] = fix_autoregressive_output(batch[i], stop_mel_token)
@@ -588,12 +598,12 @@ class TextToSpeech:
                         if self.cvvp is None:
                             self.load_cvvp()
                         self.cvvp = self.cvvp.to(self.device)
-                    if verbose:
-                        if self.cvvp is None:
-                            print("Computing best candidates using CLVP")
-                        else:
-                            print(
-                                f"Computing best candidates using CLVP {((1 - cvvp_amount) * 100):2.0f}% and CVVP {(cvvp_amount * 100):2.0f}%")
+                    if self.cvvp is None:
+                        logging.info("Computing best candidates using CLVP")
+                    else:
+                        logging.info(
+                            f"Computing best candidates using CLVP {((1 - cvvp_amount) * 100):2.0f}% and CVVP {(cvvp_amount * 100):2.0f}%")
+
                     for batch in tqdm(samples, disable=not verbose):
                         for i in range(batch.shape[0]):
                             batch[i] = fix_autoregressive_output(batch[i], stop_mel_token)
@@ -654,36 +664,15 @@ class TextToSpeech:
                                                   return_latent=True, clip_inputs=False)
                     del auto_conditioning
 
-            if verbose:
-                print("Transforming autoregressive outputs into audio..")
-            wav_candidates = []
-            if torch.cuda.is_available() or torch.backends.mps.is_available() or torch_directml.is_available():
-                with self.temporary_cuda(self.diffusion) as diffusion, self.temporary_cuda(self.vocoder) as vocoder:
-                    for b in range(best_results.shape[0]):
-                        codes = best_results[b].unsqueeze(0)
-                        latents = best_latents[b].unsqueeze(0)
+                logging.info(f"Transforming autoregressive outputs into audio..")
+                logging.info(f"Exporting Audio - The current device is: {self.device}")
 
-                        # Find the first occurrence of the "calm" token and trim the codes to that.
-                        ctokens = 0
-                        for k in range(codes.shape[-1]):
-                            if codes[0, k] == calm_token:
-                                ctokens += 1
-                            else:
-                                ctokens = 0
-                            if ctokens > 8:  # 8 tokens gives the diffusion model some "breathing room" to terminate speech.
-                                latents = latents[:, :k]
-                                break
-                        mel = do_spectrogram_diffusion(diffusion, diffuser, latents, diffusion_conditioning,
-                                                       temperature=diffusion_temperature,
-                                                       verbose=verbose)
-                        wav = vocoder.inference(mel)
-                        wav_candidates.append(wav.cpu())
-            else:
-                diffusion, vocoder = self.diffusion, self.vocoder
-                diffusion_conditioning = diffusion_conditioning.cpu()
+            wav_candidates = []
+            # if torch.cuda.is_available() or torch.backends.mps.is_available() or torch_directml.is_available():
+            with self.temporary_cuda(self.diffusion) as diffusion, self.temporary_cuda(self.vocoder) as vocoder:
                 for b in range(best_results.shape[0]):
-                    codes = best_results[b].unsqueeze(0).cpu()
-                    latents = best_latents[b].unsqueeze(0).cpu()
+                    codes = best_results[b].unsqueeze(0)
+                    latents = best_latents[b].unsqueeze(0)
 
                     # Find the first occurrence of the "calm" token and trim the codes to that.
                     ctokens = 0
@@ -700,6 +689,29 @@ class TextToSpeech:
                                                    verbose=verbose)
                     wav = vocoder.inference(mel)
                     wav_candidates.append(wav.cpu())
+
+            # else:
+            #     diffusion, vocoder = self.diffusion, self.vocoder
+            #     diffusion_conditioning = diffusion_conditioning.to(self.device)
+            #     for b in range(best_results.shape[0]):
+            #         codes = best_results[b].unsqueeze(0).to(self.device)
+            #         latents = best_latents[b].unsqueeze(0).to(self.device)
+            #
+            #         # Find the first occurrence of the "calm" token and trim the codes to that.
+            #         ctokens = 0
+            #         for k in range(codes.shape[-1]):
+            #             if codes[0, k] == calm_token:
+            #                 ctokens += 1
+            #             else:
+            #                 ctokens = 0
+            #             if ctokens > 8:  # 8 tokens gives the diffusion model some "breathing room" to terminate speech.
+            #                 latents = latents[:, :k]
+            #                 break
+            #         mel = do_spectrogram_diffusion(diffusion, diffuser, latents, diffusion_conditioning,
+            #                                        temperature=diffusion_temperature,
+            #                                        verbose=verbose)
+            #         wav = vocoder.inference(mel)
+            #         wav_candidates.append(wav.cpu())
 
             def potentially_redact(clip, text):
                 if self.enable_redaction:
